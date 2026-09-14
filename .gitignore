@@ -1,0 +1,25 @@
+# Build output and legacy build artifacts
+/build/
+/.build/
+/build_web
+/sokol-hello
+*.o
+/sokol/*/sokol_*_linux_x64_gl_debug.a
+/sokol/*/sokol_*_linux_x64_gl_release.a
+/sokol/*/sokol_*_wasm_gl_debug.a
+/sokol/*/sokol_*_wasm_gl_release.a
+
+# Generated shader bindings
+/shader.odin
+
+# Local tooling caches
+/.glsld/
+__pycache__/
+*.pyc
+
+# Editor temporary files and OS metadata
+*~
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
