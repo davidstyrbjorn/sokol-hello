@@ -76,6 +76,16 @@ Hunter :: struct {
 	quad_size:       f32,
 }
 
+Level :: struct {
+	spawn_func:     proc(),
+	spawn_position: Vector2i,
+}
+
+levels := []Level {
+	{spawn_func = spawn_level1, spawn_position = {0, 0}},
+	{spawn_func = spawn_level2, spawn_position = {0, 0}},
+}
+
 Game_State_Playing :: struct {
 	hunter: Hunter,
 }
@@ -92,9 +102,13 @@ Game :: struct {
 	world:              World,
 	game_state:         Game_State,
 	player_inside_bush: bool,
+	exit:               bool,
+	curr_level:         int,
 }
 g := Game {
 	player_inside_bush = false,
+	exit               = false,
+	curr_level         = 0,
 }
 
 quad_renderer: Quad_Renderer
@@ -136,6 +150,55 @@ main :: proc() {
 			fullscreen = false,
 		},
 	)
+}
+
+spawn_level1 :: proc() {
+	spawn_pray({3, 2})
+	spawn_pray({3, 5})
+	spawn_pray({5, 4})
+
+	spawn_bush({2, 1})
+	spawn_bush({3, 1})
+	spawn_bush({4, 3})
+	spawn_bush({4, 4})
+	spawn_bush({4, 5})
+}
+
+spawn_level2 :: proc() {
+	spawn_bush({3, 0})
+	spawn_pray({4, 0})
+	spawn_bush({5, 0})
+
+	spawn_bush({3, 3})
+	spawn_bush({3, 5})
+	spawn_bush({4, 5})
+	spawn_pray({3, 4})
+
+	spawn_pray({6, 2})
+	spawn_bush({6, 3})
+}
+
+load_current_level :: proc() {
+	// first cler all pray and bushes and reset hunter
+	state, ok := &g.game_state.(Game_State_Playing)
+	assert(ok, "Tried to load current level but state is not Game_State_Playing")
+	assert(len(g.world.players.entities) != 0, "Player needs to exist lol to load current level")
+
+	for len(g.world.prays.entities) > 0 {
+		entity_destroy(&g.world, g.world.prays.entities[0])
+	}
+	for len(g.world.bushes.entities) > 0 {
+		entity_destroy(&g.world, g.world.bushes.entities[0])
+	}
+
+	state.hunter.moves_until_aim = 3
+	levels[g.curr_level].spawn_func()
+
+	spawn_pos := levels[g.curr_level].spawn_position
+	player_transform := component_storage_get(&g.world.transforms, g.world.players.entities[0])
+	player_transform.grid_position = spawn_pos
+	player_transform.prev_grid_position = spawn_pos
+	player_transform.t = 1
 }
 
 init_cb :: proc "c" () {
@@ -182,20 +245,15 @@ init_cb :: proc "c" () {
 			spawn_quad({x, y}, .GORE, LAYER_GROUND)
 		}
 	}
-	spawn_pray({3, 2})
-	spawn_pray({2, 5})
-	spawn_pray({6, 4})
 
-	spawn_bush({2, 1})
-	spawn_bush({3, 1})
-	spawn_bush({4, 4})
-	spawn_bush({4, 5})
+	load_current_level()
 }
 
 cleanup_cb :: proc "c" () {
 	context = default_context
 
 	quad_renderer_destroy(&quad_renderer)
+	basic2d_destroy(&basic_renderer)
 
 	sg.shutdown()
 }
@@ -283,6 +341,12 @@ update_hunter :: proc() {
 	state.hunter.y_position = math.lerp(y_hidden, y_aiming, t)
 }
 
+check_level_complete :: proc() {
+	if len(g.world.prays.entities) == 0 {
+		g.curr_level += 1
+		load_current_level()
+	}
+}
 
 draw_hunter :: proc() {
 	state, ok := &g.game_state.(Game_State_Playing)
@@ -410,12 +474,17 @@ move_player :: proc(transform: ^Transform, direction: Vector2i) {
 		}
 	}
 
+	for entity in g.world.prays.entities {
+		pray_transform := component_storage_get(&g.world.transforms, entity)
+		if pray_transform.grid_position == transform.grid_position {
+			entity_destroy(&g.world, entity)
+			break
+		}
+	}
+
 	if is_correct_state && state.hunter.moves_until_aim == 0 {
-		fmt.println("...aiming")
-		if g.player_inside_bush {
-			fmt.println("missed!")
-		} else {
-			fmt.println("shot!")
+		if !g.player_inside_bush {
+			g.exit = true
 		}
 	}
 }
@@ -434,6 +503,7 @@ frame_cb :: proc "c" () {
 			update_player()
 			update_camera(f32(frame_duration))
 			update_hunter()
+			check_level_complete()
 		case Game_State_Paused:
 		}
 		update_transforms(dt)
@@ -476,6 +546,10 @@ frame_cb :: proc "c" () {
 
 	input_frame_end()
 	free_all(context.temp_allocator)
+
+	if g.exit {
+		sapp.request_quit()
+	}
 }
 
 event_cb :: proc "c" (ev: ^sapp.Event) {
