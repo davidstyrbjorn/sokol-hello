@@ -25,6 +25,10 @@ Texture :: enum u16 {
 	BLOOD_1,
 	APPLE,
 	TIGER,
+	PRAY_1,
+	PRAY_2,
+	BUSH,
+	GUN,
 }
 Texture_UVs: []Vector2i = {
 	Texture.WALL     = {0, 0},
@@ -35,6 +39,10 @@ Texture_UVs: []Vector2i = {
 	Texture.BLOOD_1  = {2, 1},
 	Texture.APPLE    = {0, 2},
 	Texture.TIGER    = {1, 2},
+	Texture.PRAY_1   = {2, 2},
+	Texture.PRAY_2   = {3, 2},
+	Texture.BUSH     = {3, 3},
+	Texture.GUN      = {0, 3},
 }
 
 ATLAS_SIZE_PER_SPRITE :: 256
@@ -52,17 +60,36 @@ Transform :: struct {
 
 LAYER_PLAYER :: 1
 LAYER_GROUND :: 0
-
 Quad :: struct {
 	layer:   u8,
 	texture: Texture,
 }
 
 Player :: distinct bool
+Pray :: distinct bool // the tiger wants to eat Pray
+Bush :: distinct bool // the tiger needs to hide from hunter behind Bush
+Hunter :: struct {
+	moves_until_aim: int,
+	y_position:      f32, // derived from moves_until_aim
+	aiming:          bool,
+	quad_size:       f32,
+}
+
+Game_State_Playing :: struct {
+	hunter: Hunter,
+}
+
+Game_State_Paused :: struct {}
+
+Game_State :: union {
+	Game_State_Playing,
+	Game_State_Paused,
+}
 
 Game :: struct {
-	camera: Camera2D,
-	world:  World,
+	camera:     Camera2D,
+	world:      World,
+	game_state: Game_State,
 }
 g: Game
 
@@ -70,11 +97,11 @@ quad_renderer: Quad_Renderer
 
 main :: proc() {
 	// Note: I started this because i watched a youtube video on it, continue it and move it onto an "easier" abstraction layer into engine.odin
-	sdl.InitSubSystem({.AUDIO})
-	spec: sdl.AudioSpec
-	audio_buf: [^]u8
-	audio_len: u32
-	assert(sdl.LoadWAV("song.wav", &spec, &audio_buf, &audio_len) != nil)
+	// sdl.InitSubSystem({.AUDIO})
+	// spec: sdl.AudioSpec
+	// audio_buf: [^]u8
+	// audio_len: u32
+	// assert(sdl.LoadWAV("song.wav", &spec, &audio_buf, &audio_len) != nil)
 
 	when ODIN_OS == .JS {
 		context.allocator = {
@@ -134,6 +161,10 @@ init_cb :: proc "c" () {
 		},
 	)
 
+	g.game_state = Game_State_Playing {
+		hunter = {aiming = false, moves_until_aim = 3, y_position = 0, quad_size = 300},
+	}
+
 	quad_renderer_init(&quad_renderer)
 
 	entity_world_init(&g.world)
@@ -143,6 +174,9 @@ init_cb :: proc "c" () {
 			spawn_quad({x, y}, .GORE, LAYER_GROUND)
 		}
 	}
+	spawn_pray({3, 2})
+	spawn_pray({2, 5})
+	spawn_pray({6, 4})
 }
 
 cleanup_cb :: proc "c" () {
@@ -191,6 +225,48 @@ spawn_player :: proc(grid_position: Vector2i) {
 	component_storage_add(&g.world.players, entity, true)
 }
 
+spawn_pray :: proc(grid_position: Vector2i) {
+	entity := entity_create(&g.world)
+	component_storage_add(
+		&g.world.transforms,
+		entity,
+		Transform {
+			grid_position = grid_position,
+			position = grid_to_world(grid_position),
+			t = 1,
+			prev_grid_position = grid_position,
+		},
+	)
+	texture := Texture.PRAY_1
+	if rand.int_range(0, 2) == 1 {
+		texture = .PRAY_2
+	}
+	component_storage_add(&g.world.quads, entity, Quad{texture = texture, layer = LAYER_PLAYER})
+	component_storage_add(&g.world.prays, entity, true)
+}
+
+update_hunter :: proc() {
+	state, ok := &g.game_state.(Game_State_Playing)
+	assert(ok)
+	y_aiming := sapp.heightf() - state.hunter.quad_size
+	y_hidden := sapp.heightf()
+	t: f32 = clamp(1.0 - (f32(state.hunter.moves_until_aim) / 3.0), 0.0, 1.0)
+	state.hunter.y_position = math.lerp(y_hidden, y_aiming, t)
+}
+
+
+draw_hunter :: proc() {
+	state, ok := &g.game_state.(Game_State_Playing)
+	assert(ok)
+	quad_renderer_submit(
+		&quad_renderer,
+		{sapp.widthf() - 300, state.hunter.y_position},
+		{1.0, 1.0} * state.hunter.quad_size,
+		{1, 1, 1, 1},
+		get_uv_rect(.GUN),
+	)
+}
+
 draw_quads :: proc() {
 	Draw_Command :: struct {
 		transform: ^Transform,
@@ -233,6 +309,17 @@ update_transforms :: proc(dt: f32) {
 	}
 }
 
+update_general :: proc() {
+	if input_key_pressed(.ESCAPE) {
+		switch state in g.game_state {
+		case Game_State_Playing:
+			g.game_state = Game_State_Paused{}
+		case Game_State_Paused:
+			g.game_state = Game_State_Playing{}
+		}
+	}
+}
+
 update_player :: proc() {
 	if len(g.world.players.entities) == 0 {
 		return
@@ -257,28 +344,32 @@ update_player :: proc() {
 
 update_camera :: proc(dt: f32) {
 	camera_speed :: 200
-	// if g.key_down[sapp.Keycode.RIGHT] {
-	// 	g.camera.position.x += camera_speed * dt
-	// } else if g.key_down[sapp.Keycode.LEFT] {
-	// 	g.camera.position.x -= camera_speed * dt
-	// } else if g.key_down[sapp.Keycode.DOWN] {
-	// 	g.camera.position.y -= camera_speed * dt
-	// } else if g.key_down[sapp.Keycode.UP] {
-	// 	g.camera.position.y += camera_speed * dt
-	// }
-	// if g.key_down[sapp.Keycode.E] {
-	// 	g.camera.zoom += 1 * dt
-	// } else if g.key_down[sapp.Keycode.Q] {
-	// 	g.camera.zoom -= 1 * dt
-	// }
+	if input_key_down(sapp.Keycode.RIGHT) {
+		g.camera.position.x += camera_speed * dt
+	} else if input_key_down(sapp.Keycode.LEFT) {
+		g.camera.position.x -= camera_speed * dt
+	} else if input_key_down(sapp.Keycode.DOWN) {
+		g.camera.position.y -= camera_speed * dt
+	} else if input_key_down(sapp.Keycode.UP) {
+		g.camera.position.y += camera_speed * dt
+	}
+	if input_key_down(sapp.Keycode.E) {
+		g.camera.zoom += 1 * dt
+	} else if input_key_down(sapp.Keycode.Q) {
+		g.camera.zoom -= 1 * dt
+	}
 }
 
 move_player :: proc(transform: ^Transform, direction: Vector2i) {
-	if transform.t >= 1.0 - math.F32_EPSILON {
+	state, is_correct_state := &g.game_state.(Game_State_Playing)
+	if transform.t >= 1.0 - math.F32_EPSILON && is_correct_state && !state.hunter.aiming {
 		transform.prev_grid_position = transform.grid_position
 		transform.t = 0
-
 		transform.grid_position += direction
+		state.hunter.moves_until_aim -= 1
+		if state.hunter.moves_until_aim == -1 {
+			state.hunter.moves_until_aim = 3
+		}
 	}
 }
 
@@ -288,17 +379,28 @@ frame_cb :: proc "c" () {
 	dt := f32(frame_duration)
 
 	{
-		update_camera(f32(frame_duration))
+		switch state in g.game_state {
+		case Game_State_Playing:
+			update_player()
+			update_camera(f32(frame_duration))
+			update_hunter()
+		case Game_State_Paused:
+		}
 		update_transforms(dt)
-		update_player()
+		update_general()
 	}
 
 	{
 		sg.begin_pass({swapchain = sglue.swapchain()})
 		quad_renderer_begin(&quad_renderer, g.camera)
 
-		// quad_renderer_submit(&quad_renderer, {0, 0}, {128, 128}, {1, 1, 1, 1}, get_uv_rect(.TIGER))
-		draw_quads()
+		switch state in g.game_state {
+		case Game_State_Playing:
+			draw_quads()
+			draw_hunter()
+		case Game_State_Paused:
+		// draw_quads()
+		}
 
 		quad_renderer_end(&quad_renderer)
 

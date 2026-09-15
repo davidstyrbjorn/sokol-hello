@@ -112,6 +112,7 @@ World :: struct {
 	transforms:     Component_Storage(Transform),
 	quads:          Component_Storage(Quad),
 	players:        Component_Storage(Player),
+	prays:          Component_Storage(Pray),
 	messages:       [dynamic]World_Message,
 }
 
@@ -128,6 +129,7 @@ entity_world_destroy :: proc(world: ^World) {
 	component_storage_destroy(&world.transforms)
 	component_storage_destroy(&world.quads)
 	component_storage_destroy(&world.players)
+	component_storage_destroy(&world.prays)
 
 	world^ = World{}
 }
@@ -156,6 +158,7 @@ entity_destroy :: proc(world: ^World, entity: Entity_ID) {
 	component_storage_remove(&world.transforms, entity)
 	component_storage_remove(&world.quads, entity)
 	component_storage_remove(&world.players, entity)
+	component_storage_remove(&world.prays, entity)
 
 	entity_remove_active(world, entity)
 	append(&world.free_entities, entity)
