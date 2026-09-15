@@ -113,6 +113,7 @@ World :: struct {
 	quads:          Component_Storage(Quad),
 	players:        Component_Storage(Player),
 	prays:          Component_Storage(Pray),
+	bushes:         Component_Storage(Bush),
 	messages:       [dynamic]World_Message,
 }
 
@@ -130,6 +131,7 @@ entity_world_destroy :: proc(world: ^World) {
 	component_storage_destroy(&world.quads)
 	component_storage_destroy(&world.players)
 	component_storage_destroy(&world.prays)
+	component_storage_destroy(&world.bushes)
 
 	world^ = World{}
 }
@@ -159,6 +161,7 @@ entity_destroy :: proc(world: ^World, entity: Entity_ID) {
 	component_storage_remove(&world.quads, entity)
 	component_storage_remove(&world.players, entity)
 	component_storage_remove(&world.prays, entity)
+	component_storage_remove(&world.bushes, entity)
 
 	entity_remove_active(world, entity)
 	append(&world.free_entities, entity)
@@ -195,11 +198,6 @@ entity_world_clear_message :: proc(world: ^World) {
 
 /** 1. Renderers **/
 
-Vertex_Data :: struct {
-	position: [2]f32,
-	uv:       [2]f32,
-}
-
 Instance_Data :: struct {
 	position: Vector2,
 	size:     Vector2,
@@ -234,7 +232,12 @@ sg_range_of :: proc(d: ^$T) -> sg.Range {
 
 /* ** 1.1 Basic Quad Renderer ** */
 
-quad_renderer_init :: proc(quad_renderer: ^Quad_Renderer) {
+quad_renderer_init :: proc(quad_renderer: ^Quad_Renderer, $texture_path: string) {
+	Vertex_Data :: struct {
+		position: [2]f32,
+		uv:       [2]f32,
+	}
+
 	quad_renderer.instance_data = make([dynamic]Instance_Data, context.allocator)
 
 	quad_renderer.shader = sg.make_shader(main_shader_desc(sg.query_backend()))
@@ -294,12 +297,6 @@ quad_renderer_init :: proc(quad_renderer: ^Quad_Renderer) {
 		},
 	)
 
-	//     .src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA,
-	// .dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-	// .src_factor_alpha = SG_BLENDFACTOR_ONE,
-	// .dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-
-
 	vertices := []Vertex_Data {
 		{position = {0, 0}, uv = {0, 0}},
 		{position = {1.0, 0}, uv = {1, 0}},
@@ -313,7 +310,7 @@ quad_renderer_init :: proc(quad_renderer: ^Quad_Renderer) {
 		{usage = {index_buffer = true}, data = sg_range(indices)},
 	)
 
-	atlas_bytes := #load("atlas.png", []u8)
+	atlas_bytes := #load(texture_path, []u8)
 	w, h: i32
 	pixels := stbi.load_from_memory(raw_data(atlas_bytes), i32(len(atlas_bytes)), &w, &h, nil, 4)
 	assert(pixels != nil)
@@ -339,12 +336,12 @@ quad_renderer_init :: proc(quad_renderer: ^Quad_Renderer) {
 }
 
 quad_renderer_begin :: proc(qr: ^Quad_Renderer, camera: Camera2D) {
-	screen_width := sapp.widthf()
-	screen_height := sapp.heightf()
 
 	sg.apply_pipeline(qr.pipeline)
 
 	// Create our shader uniform data and upload it
+	screen_width := sapp.widthf()
+	screen_height := sapp.heightf()
 	half_width := screen_width / 2.0
 	half_height := screen_height / 2.0
 	params: Vs_Params
@@ -408,6 +405,136 @@ quad_renderer_destroy :: proc(quad_renderer: ^Quad_Renderer) {
 	sg.destroy_pipeline(quad_renderer.pipeline)
 	sg.destroy_buffer(quad_renderer.instance_buffer)
 	delete(quad_renderer.instance_data)
+}
+
+/* ** 2.1 Basic Renderer more utility focused for simpler uses ** */
+
+Basic2D_Entry :: struct {
+	pipeline: sg.Pipeline,
+	shader:   sg.Shader,
+}
+
+Basic2D_Renderer :: struct {
+	entries:       map[string]^Basic2D_Entry,
+	bound_entry:   ^Basic2D_Entry,
+	vertex_buffer: sg.Buffer,
+	index_buffer:  sg.Buffer,
+}
+
+B2DR :: Basic2D_Renderer
+
+shader_param :: proc "c" (backend: sg.Backend) -> sg.Shader_Desc
+
+Basic2D_Vertex_Data :: struct {
+	position: Vector2,
+}
+
+basic2d_add_entry :: proc(renderer: ^B2DR, name: string, shader_desc: shader_param) {
+	entry := new(Basic2D_Entry)
+	renderer.entries[name] = entry
+
+	ATTR_pos :: 0
+
+	entry.shader = sg.make_shader(shader_desc(sg.query_backend()))
+	entry.pipeline = sg.make_pipeline(
+		{
+			shader = entry.shader,
+			layout = {
+				buffers = {0 = {stride = i32(size_of(Basic2D_Vertex_Data))}},
+				attrs = {
+					ATTR_pos = {
+						buffer_index = 0,
+						offset = i32(offset_of(Basic2D_Vertex_Data, position)),
+						format = .FLOAT2,
+					},
+				},
+			},
+			index_type = .UINT16,
+			colors = {
+				0 = {
+					blend = {
+						enabled = true,
+						src_factor_rgb = sg.Blend_Factor.SRC_ALPHA,
+						dst_factor_rgb = sg.Blend_Factor.ONE_MINUS_SRC_ALPHA,
+						src_factor_alpha = sg.Blend_Factor.ONE,
+						dst_factor_alpha = sg.Blend_Factor.ONE_MINUS_SRC_ALPHA,
+					},
+				},
+			},
+		},
+	)
+}
+
+basic2d_init :: proc(renderer: ^B2DR) {
+	vertices := []Basic2D_Vertex_Data {
+		{position = {0, 0}},
+		{position = {1.0, 0}},
+		{position = {0, 1.0}},
+		{position = {1.0, 1.0}},
+	}
+	renderer.vertex_buffer = sg.make_buffer({data = sg_range(vertices)})
+
+	indices := []u16{0, 1, 2, 2, 1, 3}
+	renderer.index_buffer = sg.make_buffer(
+		{usage = {index_buffer = true}, data = sg_range(indices)},
+	)
+
+	renderer.entries = make(map[string]^Basic2D_Entry)
+	renderer.bound_entry = nil
+}
+
+basic2d_bind :: proc(renderer: ^B2DR, name: string) {
+	entry, ok := renderer.entries[name]
+	assert(ok, "Tried to bind an entry with Basic2D_Renderer that was not found")
+	renderer.bound_entry = entry
+	sg.apply_pipeline(renderer.bound_entry.pipeline)
+	sg.apply_bindings(
+		{vertex_buffers = {0 = renderer.vertex_buffer}, index_buffer = renderer.index_buffer},
+	)
+}
+
+basic2d_draw :: proc(
+	renderer: ^B2DR,
+	position: Vector2,
+	size: Vector2,
+	color: Vector4,
+	camera: ^Camera2D,
+	params: $P,
+	pre_pass: proc(p: ^P) = nil,
+) {
+	assert(renderer.bound_entry != nil)
+
+	screen_width := sapp.widthf()
+	screen_height := sapp.heightf()
+	half_width := screen_width / 2.0
+	half_height := screen_height / 2.0
+	params: P
+	projection := glsl.mat4Ortho3d(0, screen_width, screen_height, 0, -1, 1)
+	view :=
+		glsl.mat4Scale({camera.zoom, camera.zoom, 1}) *
+		glsl.mat4Translate({-camera.position.x, -camera.position.y, 0})
+	model := glsl.mat4Translate({position.x, position.y, 0}) * glsl.mat4Scale({size.x, size.y, 1})
+	model_view_projection := projection * view * model
+	params.model_view_projection = transmute([16]f32)model_view_projection
+	params.color = color
+	if pre_pass != nil {
+		pre_pass(&params)
+	}
+	sg.apply_uniforms(UB_basic_params, sg_range_of(&params))
+
+	sg.draw(0, 6, 1)
+}
+
+basic2d_destroy :: proc(renderer: ^B2DR) {
+	for key, value in renderer.entries {
+		//  TODO. Destroy pipeline and shader
+		sg.destroy_shader(value.shader)
+		sg.destroy_pipeline(value.pipeline)
+		free(value)
+	}
+
+	sg.destroy_buffer(renderer.vertex_buffer)
+	sg.destroy_buffer(renderer.index_buffer)
 }
 
 /* *** 2. Utility *** */

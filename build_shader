@@ -1,1 +1,3 @@
-./sokol-shdc -i shader.glsl -o shader.odin -l glsl410:glsl300es -f sokol_odin
+file="$1"
+
+./sokol-shdc -i "$file".glsl -o "$file".odin -l glsl410:glsl300es -f sokol_odin

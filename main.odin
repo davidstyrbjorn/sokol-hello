@@ -58,6 +58,7 @@ Transform :: struct {
 	t:                  f32,
 }
 
+LAYER_BUSH :: 2
 LAYER_PLAYER :: 1
 LAYER_GROUND :: 0
 Quad :: struct {
@@ -87,13 +88,17 @@ Game_State :: union {
 }
 
 Game :: struct {
-	camera:     Camera2D,
-	world:      World,
-	game_state: Game_State,
+	camera:             Camera2D,
+	world:              World,
+	game_state:         Game_State,
+	player_inside_bush: bool,
 }
-g: Game
+g := Game {
+	player_inside_bush = false,
+}
 
 quad_renderer: Quad_Renderer
+basic_renderer: Basic2D_Renderer
 
 main :: proc() {
 	// Note: I started this because i watched a youtube video on it, continue it and move it onto an "easier" abstraction layer into engine.odin
@@ -165,7 +170,10 @@ init_cb :: proc "c" () {
 		hunter = {aiming = false, moves_until_aim = 3, y_position = 0, quad_size = 300},
 	}
 
-	quad_renderer_init(&quad_renderer)
+	quad_renderer_init(&quad_renderer, "atlas.png")
+
+	basic2d_init(&basic_renderer)
+	basic2d_add_entry(&basic_renderer, "basic", basic_shader_desc)
 
 	entity_world_init(&g.world)
 	spawn_player({0, 0})
@@ -177,6 +185,11 @@ init_cb :: proc "c" () {
 	spawn_pray({3, 2})
 	spawn_pray({2, 5})
 	spawn_pray({6, 4})
+
+	spawn_bush({2, 1})
+	spawn_bush({3, 1})
+	spawn_bush({4, 4})
+	spawn_bush({4, 5})
 }
 
 cleanup_cb :: proc "c" () {
@@ -243,6 +256,22 @@ spawn_pray :: proc(grid_position: Vector2i) {
 	}
 	component_storage_add(&g.world.quads, entity, Quad{texture = texture, layer = LAYER_PLAYER})
 	component_storage_add(&g.world.prays, entity, true)
+}
+
+spawn_bush :: proc(grid_position: Vector2i) {
+	entity := entity_create(&g.world)
+	component_storage_add(
+		&g.world.transforms,
+		entity,
+		Transform {
+			grid_position = grid_position,
+			position = grid_to_world(grid_position),
+			t = 1,
+			prev_grid_position = grid_position,
+		},
+	)
+	component_storage_add(&g.world.quads, entity, Quad{texture = Texture.BUSH, layer = LAYER_BUSH})
+	component_storage_add(&g.world.bushes, entity, true)
 }
 
 update_hunter :: proc() {
@@ -371,12 +400,33 @@ move_player :: proc(transform: ^Transform, direction: Vector2i) {
 			state.hunter.moves_until_aim = 3
 		}
 	}
+
+	// Check if we're standing inside a bush
+	g.player_inside_bush = false
+	for entity in g.world.bushes.entities {
+		bush_transform := component_storage_get(&g.world.transforms, entity)
+		if bush_transform.grid_position == transform.grid_position {
+			g.player_inside_bush = true
+		}
+	}
+
+	if is_correct_state && state.hunter.moves_until_aim == 0 {
+		fmt.println("...aiming")
+		if g.player_inside_bush {
+			fmt.println("missed!")
+		} else {
+			fmt.println("shot!")
+		}
+	}
 }
+
+time: f32 = 0
 
 frame_cb :: proc "c" () {
 	context = default_context
 	frame_duration := sapp.frame_duration()
 	dt := f32(frame_duration)
+	time += dt
 
 	{
 		switch state in g.game_state {
@@ -392,6 +442,7 @@ frame_cb :: proc "c" () {
 
 	{
 		sg.begin_pass({swapchain = sglue.swapchain()})
+
 		quad_renderer_begin(&quad_renderer, g.camera)
 
 		switch state in g.game_state {
@@ -399,10 +450,24 @@ frame_cb :: proc "c" () {
 			draw_quads()
 			draw_hunter()
 		case Game_State_Paused:
-		// draw_quads()
 		}
 
 		quad_renderer_end(&quad_renderer)
+
+		basic2d_bind(&basic_renderer, "basic")
+		basic2d_draw(
+			&basic_renderer,
+			{0, 0},
+			{sapp.widthf(), sapp.heightf()},
+			{0.8, 0.2, 0.0, 0.2},
+			&g.camera,
+			Basic_Params{},
+			proc(pass: ^Basic_Params) {
+				if g.player_inside_bush {
+					pass.color = {0, 0, 0, 0.5}
+				}
+			},
+		)
 
 		sg.end_pass()
 
